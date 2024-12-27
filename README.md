@@ -5,3 +5,5 @@
 
  Download voice models from:
  https://github.com/rhasspy/piper/blob/master/VOICES.md
+
+ For any Voice generation related issues kindly extract zip file instead. Make sure to have the appropriate piper setup for you OS.
