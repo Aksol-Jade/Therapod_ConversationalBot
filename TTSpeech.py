@@ -17,58 +17,84 @@ def is_file_in_use(file_path):
     except OSError:
         return True
 
+
 def safe_remove(file_path):
-    """Attempt to delete a file, waiting if it's in use."""
-    # Retry deletion if the file is in use
+    """Attempt to delete a file, retrying if it's in use."""
     attempts = 5
     while attempts > 0:
         if os.path.exists(file_path):
-            if not is_file_in_use(file_path):
+            try:
+                pygame.mixer.quit()
+                # Try to remove the file
                 os.remove(file_path)
                 print(f"Deleted: {file_path}")
-                break
-            else:
+                pygame.mixer.init()
+                return True
+            except PermissionError:
+                # File is likely in use; wait and retry
                 print(f"File {file_path} is in use, retrying...")
-                time.sleep(0.1)  # Wait before retrying
+                time.sleep(0.2)  # Wait before retrying
+        else:
+            print(f"File {file_path} does not exist, no need to delete.")
+            return True  # File doesn't exist, deletion is successful
         attempts -= 1
-    else:
-        print(f"Could not delete {file_path} after multiple attempts.")
 
-async def output_with_piper(text, output_file):
+    print(f"Could not delete {file_path} after multiple attempts.")
+    return False  # Indicate failure to delete the file
+
+
+def output_with_piper(text, output_file):
     pygame.mixer.init()
 
     try:
-        # Check if the mixer is playing and stop it
+        # Stop any ongoing playback and release file locks
         if pygame.mixer.music.get_busy():
-            pygame.mixer.music.stop()  # Stop playback if it's ongoing
+            pygame.mixer.music.stop()
+        pygame.mixer.quit()  # Release all file locks
+        pygame.mixer.init()  # Reinitialize for new playback
 
-        # Add a slight delay to ensure playback has stopped
-        time.sleep(0.1)  # Adjust the duration as necessary
+        time.sleep(0.1)  # Allow time for locks to release
 
         # Determine the other file to delete
-        other_file = output_file_1 if output_file == output_file_2 else output_file_2
-        
+        other_file = output_file_1 if output_file == output_file_2 else output_file_1
+
         # Safely remove the other output file if it exists
-        safe_remove(other_file)
+        if not safe_remove(other_file):
+            print(f"Warning: Could not delete {other_file}. Proceeding cautiously.")
 
-        # Command to run the Piper executable with the recognized text and save to the current output file
-        command = f'echo "{text}" | .\\piper.exe -m en_GB-cori-high.onnx -f {output_file}'
+        # Sanitize text to remove line breaks
+        sanitized_text = text.replace("\n", " ")
 
-        # Run the command and wait for it to complete
+        # Run the Piper command to generate the new file
+        command = f'echo "{sanitized_text}" | .\\piper.exe -m en_GB-cori-high.onnx -f {output_file}'
+        print(f"Executing command: {command}")
         subprocess.run(command, shell=True, check=True)
 
-        # Load and play the output audio file
+        # Ensure the output file exists
+        if not os.path.exists(output_file):
+            print(f"Error: Output file {output_file} was not created.")
+            return False
+
+        print(f"File {output_file} successfully created.")
+
+        # Load and play the new audio file
         pygame.mixer.music.load(output_file)
         pygame.mixer.music.play()
 
         print(f"Speaking: {text}")
 
-        # Wait until the music finishes playing
+        # Wait until playback finishes
         while pygame.mixer.music.get_busy():
-            pygame.time.Clock().tick(10)  # Wait for music to finish playing
+            pygame.time.Clock().tick(10)
+
+        return True  # Indicate success
 
     except subprocess.CalledProcessError as e:
         print(f"An error occurred while generating audio: {e}")
+        return False
     except Exception as e:
         print(f"An error occurred during playback: {e}")
+        return False
 
+    finally:
+        pygame.mixer.quit()  # Release resources

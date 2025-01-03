@@ -1,5 +1,6 @@
-import asyncio
-from langchain_community.chat_models import ChatOllama
+
+#from langchain_community.chat_models import ChatOllama
+from langchain_ollama import ChatOllama
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_community.chat_message_histories import ChatMessageHistory
@@ -13,17 +14,24 @@ from langchain_huggingface import HuggingFaceEmbeddings
 
 from DetectEmotions import listen_for_commands
 from TTSpeech import output_with_piper
+from summary import summarize
+from critical import critical_notif
+import torch
 from rag_utils import prepare_and_split_docs, ingest_into_vectordb
+import time
+from post_summary import send_post_request
 
-
-async def initialize_conversation_chain(model:str, retriever):
+def initialize_conversation_chain(model:str, retriever):
     llm = ChatOllama(
         model=model,
+        verbose=False,
         temperature=0.9,
-        top_k=90,
-        num_predict=2048,
-        repeat_last_n=512,
-        verbose=False)
+        top_k=70,
+        top_p=0.7,
+        num_predict=512,
+        num_ctx=2048,
+        num_gpu=1, 
+    )
 
     contextualize_q_system_prompt = (
         "Given a chat history and the latest user question "
@@ -87,7 +95,7 @@ async def initialize_conversation_chain(model:str, retriever):
     return conversational_rag_chain
 
 
-async def main():
+def main():
     output_wavfile_1 = "temp_output_1.wav"
     output_wavfile_2 = "temp_output_2.wav"
     current_wavfile = output_wavfile_1
@@ -99,34 +107,67 @@ async def main():
     past_chat_history = prepare_and_split_docs(file_directory)
     vectorstore = ingest_into_vectordb(past_chat_history, embeddings)
     retriever = vectorstore.as_retriever()
-    model = 'yi:6b-chat-q4_K_M'
+    model = 'therapodLM'
 
-    chat_chain = await initialize_conversation_chain(model, retriever)
+    chat_chain = initialize_conversation_chain(model, retriever)
+
+    session_history = []
 
     while True:
-        user_input = None
-        stt_input = None   
 
-        while user_input is None:                                                                                                             
-            user_input, stt_input = await listen_for_commands()
+        user_input, raw_text = listen_for_commands()
 
-        if stt_input.lower() == "exit" or stt_input.lower() == "goodbye":
-            ai_response = "Alright, Take care! Feel free to reach out anytime."
-            await output_with_piper(ai_response, current_wavfile)
-            break
+        critical_notif(raw_text)
+
+        session_history.append(f'Client: {raw_text}')
         
+
+        if "exit" in user_input or "goodbye" in user_input:
+            ai_response = "Alright, Take care! Feel free to reach out anytime."
+            output_with_piper(ai_response, current_wavfile)
+            break
+        # Record the start time
+        start_time = time.time()
         response_chain =  chat_chain.invoke(
             {"input": user_input},
             config={"configurable": {"session_id": "001-1"}}
         )
+        # Record the end time
+        end_time = time.time()
+
+        # Calculate the elapsed time
+        elapsed_time = end_time - start_time
+
+        # Print the elapsed time
+        print(f"RESPONSE GENERATION ran for {elapsed_time:.2f} seconds")
         
         ai_response = response_chain["answer"]
 
-        await output_with_piper(ai_response, current_wavfile)
+        session_history.append(f'THERAPOD: {ai_response}')
+
+        output_with_piper(ai_response, current_wavfile)
         current_wavfile = output_wavfile_2 if current_wavfile == output_wavfile_1 else output_wavfile_1
         print(f"AI Therapist: {ai_response}")
 
+        torch.cuda.empty_cache()
+        
+
+    start_time = time.time()
+    summarized_history = summarize(session_history)
+    print(summarized_history)
+    send_post_request(1, str(summarized_history))
+    print(send_post_request)
+    # Record the end time
+    end_time = time.time()
+
+    # Calculate the elapsed time
+    elapsed_time = end_time - start_time
+
+
+    # Print the elapsed time
+    print(f"SUMMARY GENERATION ran for {elapsed_time:.2f} seconds")
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
+    
